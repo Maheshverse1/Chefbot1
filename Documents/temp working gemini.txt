@@ -1,0 +1,172 @@
+import streamlit as st
+import pandas as pd
+import os
+import google.generativeai as genai
+import base64  # For image conversion
+
+# --- Setup ---
+SCRIPT_DIR = os.path.dirname(__file__)
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+EXCEL_FILE = os.path.join(DATA_DIR, "Recipebase.xlsx")
+logo_path = os.path.join(DATA_DIR, "Lifecode_Logo.png")
+CSS_FILE = os.path.join(SCRIPT_DIR, "style.css")
+
+APPROVED_SKU_LIST = [
+    "Almonds (Whole)", "Sunflower Seed (Whole)", "Pumpkin Seed (Whole)",
+    "Black Raisins (Whole)", "Cashew (Whole)", "Dates (Whole)", "Raisins (Whole)",
+    "Walnut (Whole)", "Toor Dal Arhar Split", "Black Pepper (Whole)", "Turmeric",
+    "Cold Pressed Sesame Oil White", "Mustard (Whole)", "Cumin (Whole)", "Dry Red Chilli",
+    "Garlic", "Curry Leaves", "Coriander Leaves", "Salt", "Water"
+]
+
+PRICE_DICT = {
+    "Almonds (Whole)": 940, "Sunflower Seed (Whole)": 130, "Pumpkin Seed (Whole)": 530,
+    "Black Raisins (Whole)": 195, "Cashew (Whole)": 1000, "Dates (Whole)": 250,
+    "Raisins (Whole)": 195, "Walnut (Whole)": 1370, "Toor Dal Arhar Split": 155,
+    "Black Pepper (Whole)": 950, "Turmeric": 210, "Cold Pressed Sesame Oil White": 310,
+    "Mustard (Whole)": 120, "Cumin (Whole)": 365, "Dry Red Chilli": 320,
+    "Garlic": 0, "Curry Leaves": 0, "Coriander Leaves": 0, "Salt": 0, "Water": 0
+}
+
+# --- Excel Handling ---
+def load_memory():
+    try:
+        return pd.read_excel(EXCEL_FILE)
+    except FileNotFoundError:
+        return pd.DataFrame(columns=[
+            "Recipe_Name", "Standard_Portion_Assumed_(Per_Person)", "Ingredients_(with_unit_quantity)",
+            "Organic_Grocery_Required_(Per_Person)", "Grocery_Didn’t_Match_(if_any)",
+            "Suitable_Accompaniment_(if_any)", "Total_Cost_(₹_Per_Person)", "Response"
+        ])
+
+def save_to_memory(df):
+    df.to_excel(EXCEL_FILE, index=False)
+
+# --- Validators ---
+def validate_units(ingredient_lines):
+    allowed_units = ["g", "ml", "kg", "L"]
+    for line in ingredient_lines:
+        if not any(unit in line for unit in allowed_units):
+            return False
+    return True
+
+def match_skus(ingredient_lines):
+    matched = []
+    unmatched = []
+    for line in ingredient_lines:
+        name = line.split("-")[0].strip()
+        if name in APPROVED_SKU_LIST:
+            matched.append(line)
+        else:
+            unmatched.append(line)
+    return matched, unmatched
+
+def calculate_cost(matched_lines):
+    total = 0.0
+    for line in matched_lines:
+        try:
+            name, qty_unit = line.split("-")
+            name = name.strip()
+            qty_unit = qty_unit.strip()
+            qty_str = ''.join([c for c in qty_unit if c.isdigit() or c == '.'])
+            unit = ''.join([c for c in qty_unit if c.isalpha()])
+            if not qty_str:
+                continue
+            qty = float(qty_str)
+            price = PRICE_DICT.get(name, 0)
+            if unit.lower() in ["g", "ml"]:
+                total += (price / 1000) * qty
+            elif unit.lower() in ["kg", "l"]:
+                total += price * qty
+        except:
+            continue
+    return f"₹{total:.2f}"
+
+# --- Core Logic ---
+def get_recipe(dish_name, api_key):
+    df = load_memory()
+    if dish_name in df["Recipe_Name"].values:
+        row = df[df["Recipe_Name"] == dish_name].iloc[0]
+        return row, False
+
+    approved_list_text = '\n'.join([f"• {item}" for item in APPROVED_SKU_LIST])
+    prices_text = '\n'.join([f"• {item} – ₹{PRICE_DICT[item]}/kg or /L" for item in PRICE_DICT])
+
+    prompt = f"""
+You are a wise and experienced 60+ year old Chettinad chef working for a modern nutrition brand called Lifecode.
+Your task is to prepare precise traditional Tamil recipes using only the below grocery items and their prices.
+You must not invent new ingredients or use different names.
+
+====================
+📦 APPROVED INGREDIENTS
+====================
+{approved_list_text}
+
+====================
+💰 INGREDIENT PRICES
+====================
+{prices_text}
+
+====================
+🎯 OUTPUT FORMAT (MUST FOLLOW EXACTLY)
+====================
+1. Recipe Name (traditional Tamil)
+2. Standard Portion Assumed (Per Person)
+    • Yield – ___ g cooked
+    • Calories – ___ kcal approx.
+    • Quantity – Approx. ___
+3. Ingredients (with unit quantity)
+4. Organic Grocery Required (Per Person) – matched from approved SKU list only
+5. Grocery Didn’t Match (if any)
+6. Suitable Accompaniment (if any)
+7. Total Cost (₹ Per Person)
+8. Response (Step-by-step preparation in simple clear instructions)
+
+Dish Name: {dish_name}
+Only use g/ml units. Never use cups, spoons, pinch, etc. Stick to the above SKU list only.
+"""
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+        chat = model.start_chat()
+        response = chat.send_message(prompt).text
+    except Exception as e:
+        st.error(f"❌ Gemini call failed: {e}")
+        return None, False
+
+    lines = [line for line in response.strip().split("\n") if line.strip() != ""]
+    parsed_values = {col: "" for col in df.columns}
+    current_key = None
+    key_mapping = {
+        "1. Recipe Name": "Recipe_Name",
+        "2. Standard Portion Assumed": "Standard_Portion_Assumed_(Per_Person)",
+        "3. Ingredients": "Ingredients_(with_unit_quantity)",
+        "4. Organic Grocery Required": "Organic_Grocery_Required_(Per_Person)",
+        "5. Grocery Didn’t Match": "Grocery_Didn’t_Match_(if_any)",
+        "6. Suitable Accompaniment": "Suitable_Accompaniment_(if_any)",
+        "7. Total Cost": "Total_Cost_(₹_Per_Person)",
+        "8. Response": "Response"
+    }
+
+    for line in lines:
+        for heading, key in key_mapping.items():
+            if line.startswith(heading):
+                current_key = key
+                parsed_values[current_key] = line.split(":", 1)[1].strip() if ":" in line else ""
+                break
+        else:
+            if current_key:
+                parsed_values[current_key] += "\n" + line.strip()
+
+    ing_lines = parsed_values["Ingredients_(with_unit_quantity)"].split("\n")
+    matched, unmatched = match_skus(ing_lines)
+    parsed_values["Organic_Grocery_Required_(Per_Person)"] = "\n".join(matched) if matched else "• Not applicable"
+    parsed_values["Grocery_Didn’t_Match_(if_any)"] = "\n".join(unmatched) if unmatched else "• Not applicable"
+    parsed_values["Total_Cost_(₹_Per_Person)"] = calculate_cost(matched)
+
+    df.loc[len(df)] = [parsed_values[col] for col in df.columns]
+    save_to_memory(df)
+
+    return df.iloc[-1], True

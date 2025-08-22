@@ -1,0 +1,115 @@
+/* General body styling - More aggressive targeting for Streamlit */
+html, body {
+    font-family: 'Inter', sans-serif; /* Assuming Inter or similar from common web designs */
+    color: #333333;
+    background-color: #f0f2f6 !important; /* Use !important to override Streamlit defaults */
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden; /* Prevent horizontal scrollbar if elements slightly overflow */
+}
+
+/* Target Streamlit's main content area for background */
+.stApp {
+    background-color: #f0f2f6 !important; /* Apply to Streamlit's main app container */
+}
+
+
+
+.main-header img {
+    /* Adjust logo size here */
+    max-width: 550px; /* Increased size, adjust as needed */
+    height: auto;
+    display: block; /* Ensures it behaves like a block element for centering */
+    margin-left: auto;
+    margin-right: auto;
+    margin-top: 0 !important; /* Remove top margin on image */
+    padding-top: 0 !important; /* Remove top padding on image */
+}
+
+
+.main-header h1 {
+    color: #263974; /* Your specified brand color */
+    font-size: 2.8em; /* Slightly larger heading */
+    margin-top: 10px;
+    margin-bottom: 5px;
+}
+
+.main-header p {
+    color: #4d4d4f;
+    font-size: 1.1em;
+    margin-top: 0;
+}
+
+/* Input field styling */
+.stTextInput > label {
+    font-size: 1.1em; /* Make label slightly larger */
+    font-weight: bold;
+    color: #263974; /* Match brand color */
+}
+.stTextInput > div > div > input {
+    border-radius: 8px;
+    border: 1px solid #ced4da;
+    padding: 12px 18px; /* Slightly more padding */
+    font-size: 1.1em;
+}
+
+/* Button styling (example if you had buttons) */
+.stButton > button {
+    background-color: #263974;
+    color: white;
+    border-radius: 8px;
+    padding: 10px 20px;
+    font-size: 1em;
+    border: none;
+    cursor: pointer;
+}
+
+.stButton > button:hover {
+    background-color: #1a2a5a;
+}
+
+/* Chat message styling */
+.st-chat-message-container { /* This is the parent of the message div */
+    margin-bottom: 15px; /* Add some space between messages */
+}
+.st-chat-message {
+    background-color: #e6f7ff; /* Light blue for assistant messages */
+    border-radius: 10px;
+    padding: 15px;
+}
+
+.st-chat-message.user {
+    background-color: #f0f0f0; /* Light gray for user messages */
+}
+
+/* Response section styling */
+.recipe-section {
+    margin-top: 30px; /* More space before each recipe section */
+    padding: 15px;
+    border-radius: 10px;
+    background-color: #ffffff; /* White background for recipe sections */
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08); /* Subtle shadow */
+}
+
+.recipe-section h3 {
+    color: #263974;
+    font-size: 1.5em; /* Slightly larger heading */
+    margin-top: 0; /* Remove default top margin */
+    margin-bottom: 10px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid #eee; /* Separator for clarity */
+}
+
+.recipe-content-box {
+    background-color: #f9f9f9;
+    padding: 15px; /* More padding */
+    border-radius: 8px;
+    border: 1px solid #e0e0e0;
+    white-space: pre-wrap; /* To preserve newlines from the model's response */
+    line-height: 1.6; /* Improve readability */
+    font-size: 1em;
+}
+
+.stAlert {
+    margin-top: 20px; /* Space for alerts like "API key needed" */
+}

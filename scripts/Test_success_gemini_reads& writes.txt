@@ -1,0 +1,269 @@
+# --- Imports ---
+import streamlit as st
+import pandas as pd
+import os
+import google.generativeai as genai
+import re
+import base64
+
+# --- Global Paths ---
+SCRIPT_DIR = os.path.dirname(__file__)
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+EXCEL_FILE = os.path.join(DATA_DIR, "Recipebase.xlsx")
+logo_path = os.path.join(DATA_DIR, "Lifecode_Logo.png")
+CSS_FILE = os.path.join(SCRIPT_DIR, "style.css")
+
+# --- Approved SKUs & Prices ---
+APPROVED_SKU_LIST_RAW = [
+    "Almonds (Whole)", "Sunflower Seed (Whole)", "Pumpkin Seed (Whole)",
+    "Black Raisins (Whole)", "Cashew (Whole)", "Dates (Whole)", "Raisins (Whole)",
+    "Walnut (Whole)", "Toor Dal Arhar Split", "Black Pepper (Whole)", "Turmeric",
+    "Cold Pressed Sesame Oil White", "Mustard (Whole)", "Cumin (Whole)", "Dry Red Chilli",
+    "Garlic", "Curry Leaves", "Coriander Leaves", "Salt", "Water"
+]
+APPROVED_SKU_LIST = {item.strip().lower() for item in APPROVED_SKU_LIST_RAW}
+PRICE_DICT = {
+    "Almonds (Whole)": 940, "Sunflower Seed (Whole)": 130, "Pumpkin Seed (Whole)": 530,
+    "Black Raisins (Whole)": 195, "Cashew (Whole)": 1000, "Dates (Whole)": 250,
+    "Raisins (Whole)": 195, "Walnut (Whole)": 1370, "Toor Dal Arhar Split": 155,
+    "Black Pepper (Whole)": 950, "Turmeric": 210, "Cold Pressed Sesame Oil White": 310,
+    "Mustard (Whole)": 120, "Cumin (Whole)": 365, "Dry Red Chilli": 320,
+    "Garlic": 0, "Curry Leaves": 0, "Coriander Leaves": 0, "Salt": 0, "Water": 0
+}
+NORMALIZED_PRICE_DICT = {k.strip().lower(): v for k, v in PRICE_DICT.items()}
+
+# --- Streamlit UI Setup ---
+st.set_page_config(page_title="🧬 Lifecode Recipe Generator", layout="centered")
+
+# --- Gemini API Key Entry ---
+if "gemini_api_key" not in st.session_state:
+    st.session_state.gemini_api_key = ""
+
+with st.sidebar:
+    st.markdown("### 🔐 Gemini API Key")
+    st.session_state.gemini_api_key = st.text_input(
+        "Enter your Gemini API key:",
+        type="password",
+        value=st.session_state.gemini_api_key,
+        placeholder="Your_Key",
+    )
+    if not st.session_state.gemini_api_key:
+        st.warning("⚠️ Please enter your Gemini API key in the sidebar.")
+
+# --- Utilities ---
+def get_base64_image(path):
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    return ""
+
+def load_memory():
+    try:
+        return pd.read_excel(EXCEL_FILE)
+    except FileNotFoundError:
+        return pd.DataFrame(columns=[
+            "Recipe_Name",
+            "Standard_Portion_Assumed_(Per_Person)",
+            "Ingredients_(with_unit_quantity)",
+            "Organic_Grocery_Required_(Per_Person)",
+            "Grocery_Didn’t_Match_(if_any)",
+            "Suitable_Accompaniment_(if_any)",
+            "Total_Cost_(₹_Per_Person)",
+            "Response"
+        ])
+
+def ask_gemini_for_recipe(recipe_name):
+    if not st.session_state.get("gemini_api_key"):
+        st.error("❌ Gemini API key is missing.")
+        return "API key not provided."
+
+    genai.configure(api_key=st.session_state.gemini_api_key, transport="rest")
+
+    prompt = f"""You are a 60+ year Chettinad culinary expert. Provide a traditional Tamil recipe for '{recipe_name}' with:
+- Standard portion per person
+- Ingredients with unit quantity
+- Organic grocery required per person
+- Suitable accompaniment (if any)
+- Preparation steps
+
+Format:
+<<
+🍃 Recipe Name: <name>
+🍽️ Standard Portion Assumed (Per Person): <details>
+🧂 Ingredients (with unit quantity): <list>
+🌿 Organic Grocery Required (Per Person): <list>
+🥗 Suitable Accompaniment (if any): <optional>
+🧾 Preparation Steps: <steps>
+>>"""
+
+    try:
+        model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        st.error(f"Gemini Error: {e}")
+        return "Gemini failed to generate a recipe."
+
+def parse_gemini_response(response_text):
+    sections = {
+        "Recipe_Name": "",
+        "Standard_Portion_Assumed_(Per_Person)": "",
+        "Ingredients_(with_unit_quantity)": "",
+        "Organic_Grocery_Required_(Per_Person)": "",
+        "Suitable_Accompaniment_(if_any)": "",
+        "Response": ""
+    }
+
+    label_map = {
+        "recipe name": "Recipe_Name",
+        "standard portion": "Standard_Portion_Assumed_(Per_Person)",
+        "ingredients": "Ingredients_(with_unit_quantity)",
+        "organic grocery": "Organic_Grocery_Required_(Per_Person)",
+        "suitable accompaniment": "Suitable_Accompaniment_(if_any)",
+        "preparation steps": "Response"
+    }
+
+    current_key = None
+    buffer = []
+
+    for line in response_text.splitlines():
+        line_clean = line.strip().lower()
+        matched = False
+        for label, key in label_map.items():
+            if label in line_clean:
+                # store previous block
+                if current_key and buffer:
+                    sections[current_key] = "\n".join(buffer).strip()
+                    buffer = []
+                current_key = key
+                matched = True
+                # remove the label part from line and keep the rest
+                cleaned_line = re.sub(r".*?:", "", line, 1).strip()
+                if cleaned_line:
+                    buffer.append(cleaned_line)
+                break
+        if not matched and current_key:
+            buffer.append(line.strip())
+
+    # final flush
+    if current_key and buffer:
+        sections[current_key] = "\n".join(buffer).strip()
+
+    # attempt fallback recipe name
+    if not sections["Recipe_Name"]:
+        match = re.search(r"##\s*(.*)", response_text)
+        if match:
+            sections["Recipe_Name"] = match.group(1).strip()
+
+    return sections
+
+
+def compute_cost(ingredients_str):
+    unmatched = []
+    total_cost = 0.0
+
+    for line in ingredients_str.splitlines():
+        item = line.split('(')[0].strip().lower()
+        if item in APPROVED_SKU_LIST:
+            unit_price = NORMALIZED_PRICE_DICT.get(item, 0)
+            total_cost += unit_price / 10  # crude logic: assume 10 servings per ₹value
+        else:
+            unmatched.append(item)
+    return total_cost, unmatched
+
+# --- Load Custom CSS ---
+try:
+    with open(CSS_FILE) as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+except FileNotFoundError:
+    st.error(f"❌ CSS file not found at '{CSS_FILE}'. Please ensure 'style.css' is in the same directory.")
+except Exception as e:
+    st.error(f"❌ Error loading CSS: {e}")
+
+# --- Logo and Header ---
+st.markdown("<div class='main-header'>", unsafe_allow_html=True)
+if os.path.exists(logo_path):
+    logo_b64 = get_base64_image(logo_path)
+    if logo_b64:
+        st.markdown(f"<div style='text-align:center;'><img src='data:image/png;base64,{logo_b64}'></div>", unsafe_allow_html=True)
+st.markdown("""
+    <h1>🍛 Lifecode Recipe Generator</h1>
+    <p>From Insight to Foresight: Traditional Tamil recipes with modern precision</p>
+</div>
+""", unsafe_allow_html=True)
+
+# --- Chat Memory ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"], unsafe_allow_html=True)
+
+# --- Main Input Logic ---
+if user_input := st.chat_input("Which Tamil recipe would you like today?"):
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Searching Lifecode Chef's memory..."):
+            df = load_memory()
+            match_row = df[df["Recipe_Name"].str.strip().str.lower() == user_input.strip().lower()]
+
+            if not match_row.empty:
+                row = match_row.iloc[0]
+                response_md = f"""
+<p style='color:#007bff; font-style:italic;'>📒 Lifecode Chef remembered this one!</p>
+## {row['Recipe_Name']}
+
+### Portion Details
+{row['Standard_Portion_Assumed_(Per_Person)']}
+
+### Ingredients
+{row['Ingredients_(with_unit_quantity)']}
+
+### Preparation Steps
+{row['Response']}
+
+"""
+                if str(row['Suitable_Accompaniment_(if_any)']).strip().lower() not in ['n/a', 'not applicable', '']:
+                    response_md += f"### Suitable Accompaniment\n{row['Suitable_Accompaniment_(if_any)']}\n\n"
+                response_md += f"### Estimated Cost\n{row['Total_Cost_(₹_Per_Person)']}\n\n"
+
+                st.markdown(response_md, unsafe_allow_html=True)
+                st.session_state.messages.append({"role": "assistant", "content": response_md})
+            else:
+                with st.spinner("Recipe not found. Asking Gemini Chef..."):
+                    raw_response = ask_gemini_for_recipe(user_input)
+                    parsed_data = parse_gemini_response(raw_response)
+
+                    cost, unmatched_items = compute_cost(parsed_data["Ingredients_(with_unit_quantity)"])
+                    parsed_data["Grocery_Didn’t_Match_(if_any)"] = ", ".join(unmatched_items)
+                    parsed_data["Total_Cost_(₹_Per_Person)"] = f"₹ {round(cost, 2)}"
+
+                    df = pd.concat([df, pd.DataFrame([parsed_data])], ignore_index=True)
+                    df.to_excel(EXCEL_FILE, index=False)
+
+                    response_md = f"""
+<p style='color:#ff8800; font-style:italic;'>🧠 Gemini Chef created this for you!</p>
+## {parsed_data['Recipe_Name']}
+
+### Portion Details
+{parsed_data['Standard_Portion_Assumed_(Per_Person)']}
+
+### Ingredients
+{parsed_data['Ingredients_(with_unit_quantity)']}
+
+### Preparation Steps
+{parsed_data['Response']}
+
+"""
+                    if parsed_data["Suitable_Accompaniment_(if_any)"].lower() not in ["not applicable", "n/a", ""]:
+                        response_md += f"### Suitable Accompaniment\n{parsed_data['Suitable_Accompaniment_(if_any)']}\n\n"
+                    response_md += f"### Estimated Cost\n₹ {round(cost, 2)}\n\n"
+
+                    st.markdown(response_md, unsafe_allow_html=True)
+                    st.session_state.messages.append({"role": "assistant", "content": response_md})
